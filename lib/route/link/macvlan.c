@@ -11,7 +11,7 @@
 
 /**
  * @ingroup link
- * @defgroup macvlan MACVLAN
+ * @defgroup macvlan MACVLAN/MACVTAP
  * MAC-based Virtual LAN link module
  *
  * @details
@@ -30,6 +30,7 @@
 #include <netlink/route/rtnl.h>
 #include <netlink-private/route/link/api.h>
 #include <netlink/route/link/macvlan.h>
+#include <netlink/route/link/macvtap.h>
 
 #include <linux/if_link.h>
 
@@ -74,7 +75,7 @@ static int macvlan_parse(struct rtnl_link *link, struct nlattr *data,
 	struct macvlan_info *mvi;
 	int err;
 
-	NL_DBG(3, "Parsing MACVLAN link info");
+	NL_DBG(3, "Parsing %s link info", link->l_info_ops->io_name);
 
 	if ((err = nla_parse_nested(tb, IFLA_MACVLAN_MAX, data, macvlan_policy)) < 0)
 		goto errout;
@@ -112,12 +113,12 @@ static void macvlan_dump(struct rtnl_link *link, struct nl_dump_params *p)
 
 	if (mvi->mvi_mask & MACVLAN_HAS_MODE) {
 		rtnl_link_macvlan_mode2str(mvi->mvi_mode, buf, sizeof(buf));
-		nl_dump(p, "macvlan-mode %s", buf);
+		nl_dump(p, "%s-mode %s", link->l_info_ops->io_name, buf);
 	}
 
 	if (mvi->mvi_mask & MACVLAN_HAS_FLAGS) {
 		rtnl_link_macvlan_flags2str(mvi->mvi_flags, buf, sizeof(buf));
-		nl_dump(p, "macvlan-flags %s", buf);
+		nl_dump(p, "%s-flags %s", link->l_info_ops->io_name, buf);
 	}
 }
 
@@ -173,10 +174,31 @@ static struct rtnl_link_info_ops macvlan_info_ops = {
 	.io_free		= macvlan_free,
 };
 
+static struct rtnl_link_info_ops macvtap_info_ops = {
+	.io_name		= "macvtap",
+	.io_alloc		= macvlan_alloc,
+	.io_parse		= macvlan_parse,
+	.io_dump = {
+	    [NL_DUMP_LINE]	= macvlan_dump,
+	    [NL_DUMP_DETAILS]	= macvlan_dump,
+	},
+	.io_clone		= macvlan_clone,
+	.io_put_attrs		= macvlan_put_attrs,
+	.io_free		= macvlan_free,
+};
+
 /** @cond SKIP */
 #define IS_MACVLAN_LINK_ASSERT(link) \
-	if ((link)->l_info_ops != &macvlan_info_ops) { \
+	if ((link)->l_info_ops != &macvlan_info_ops || \
+	    strcmp ((link)->l_info_ops->io_name, "macvlan")) { \
 		APPBUG("Link is not a macvlan link. set type \"macvlan\" first."); \
+		return -NLE_OPNOTSUPP; \
+	}
+
+#define IS_MACVTAP_LINK_ASSERT(link) \
+	if ((link)->l_info_ops != &macvtap_info_ops || \
+	    strcmp((link)->l_info_ops->io_name, "macvtap")) { \
+		APPBUG("Link is not a macvtap link. set type \"macvtap\" first."); \
 		return -NLE_OPNOTSUPP; \
 	}
 /** @endcond */
@@ -313,6 +335,140 @@ uint16_t rtnl_link_macvlan_get_flags(struct rtnl_link *link)
 
 /** @} */
 
+
+/**
+ * @name MACVTAP Object
+ * @{
+ */
+
+/**
+ * Allocate link object of type MACVTAP
+ *
+ * @return Allocated link object or NULL.
+ */
+struct rtnl_link *rtnl_link_macvtap_alloc(void)
+{
+	struct rtnl_link *link;
+	int err;
+
+	if (!(link = rtnl_link_alloc()))
+		return NULL;
+
+	if ((err = rtnl_link_set_type(link, "macvtap")) < 0) {
+		rtnl_link_put(link);
+		return NULL;
+	}
+
+	return link;
+}
+
+/**
+ * Check if link is a MACVTAP link
+ * @arg link		Link object
+ *
+ * @return True if link is a MACVTAP link, otherwise false is returned.
+ */
+int rtnl_link_is_macvtap(struct rtnl_link *link)
+{
+	return link->l_info_ops && !strcmp(link->l_info_ops->io_name, "macvtap");
+}
+
+/**
+ * Set MACVTAP MODE
+ * @arg link		Link object
+ * @arg mode		MACVTAP mode
+ *
+ * @return 0 on success or a negative error code
+ */
+int rtnl_link_macvtap_set_mode(struct rtnl_link *link, uint32_t mode)
+{
+	struct macvlan_info *mvi = link->l_info;
+
+	IS_MACVTAP_LINK_ASSERT(link);
+
+	mvi->mvi_mode = mode;
+	mvi->mvi_mask |= MACVLAN_HAS_MODE;
+
+	return 0;
+}
+
+/**
+ * Get MACVTAP Mode
+ * @arg link		Link object
+ *
+ * @return MACVTAP mode, 0 if not set or a negative error code.
+ */
+uint32_t rtnl_link_macvtap_get_mode(struct rtnl_link *link)
+{
+	struct macvlan_info *mvi = link->l_info;
+
+	IS_MACVTAP_LINK_ASSERT(link);
+
+	if (mvi->mvi_mask & MACVLAN_HAS_MODE)
+		return mvi->mvi_mode;
+	else
+		return 0;
+}
+
+/**
+ * Set MACVTAP flags
+ * @arg link		Link object
+ * @arg flags		MACVTAP flags
+ *
+ * @return 0 on success or a negative error code.
+ */
+int rtnl_link_macvtap_set_flags(struct rtnl_link *link, uint16_t flags)
+{
+	struct macvlan_info *mvi = link->l_info;
+
+	IS_MACVTAP_LINK_ASSERT(link);
+
+	mvi->mvi_flags |= flags;
+	mvi->mvi_mask |= MACVLAN_HAS_FLAGS;
+
+	return 0;
+}
+
+/**
+ * Unset MACVTAP flags
+ * @arg link		Link object
+ * @arg flags		MACVTAP flags
+ *
+ * Note: kernel currently only has a single flag and lacks flags_mask to
+ * indicate which flags shall be changed (it always all).
+ *
+ * @return 0 on success or a negative error code.
+ */
+int rtnl_link_macvtap_unset_flags(struct rtnl_link *link, uint16_t flags)
+{
+	struct macvlan_info *mvi = link->l_info;
+
+	IS_MACVTAP_LINK_ASSERT(link);
+
+	mvi->mvi_flags &= ~flags;
+	mvi->mvi_mask |= MACVLAN_HAS_FLAGS;
+
+	return 0;
+}
+
+/**
+ * Get MACVTAP flags
+ * @arg link		Link object
+ *
+ * @return MACVTAP flags, 0 if none set, or a negative error code.
+ */
+uint16_t rtnl_link_macvtap_get_flags(struct rtnl_link *link)
+{
+	struct macvlan_info *mvi = link->l_info;
+
+	IS_MACVTAP_LINK_ASSERT(link);
+
+	return mvi->mvi_flags;
+}
+
+/** @} */
+
+
 static const struct trans_tbl macvlan_flags[] = {
 	__ADD(MACVLAN_FLAG_NOPROMISC, nopromisc),
 };
@@ -361,11 +517,13 @@ int rtnl_link_macvlan_str2mode(const char *name)
 static void __init macvlan_init(void)
 {
 	rtnl_link_register_info(&macvlan_info_ops);
+	rtnl_link_register_info(&macvtap_info_ops);
 }
 
 static void __exit macvlan_exit(void)
 {
 	rtnl_link_unregister_info(&macvlan_info_ops);
+	rtnl_link_unregister_info(&macvtap_info_ops);
 }
 
 /** @} */
