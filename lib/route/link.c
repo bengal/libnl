@@ -67,6 +67,27 @@ static struct nl_cache_ops rtnl_link_ops;
 static struct nl_object_ops link_obj_ops;
 /** @endcond */
 
+struct rtnl_link *link_lookup(struct nl_cache *cache, int ifindex)
+{
+	struct rtnl_link *link = NULL;
+	int fetched_cache = 0;
+
+	if (!cache) {
+		cache = nl_cache_mngt_require_safe("route/link");
+		fetched_cache = 1;
+	}
+
+	if (!cache)
+		return NULL;
+
+	link = rtnl_link_get(cache, ifindex);
+
+	if (fetched_cache)
+		nl_cache_put(cache);
+
+	return link;
+}
+
 static struct rtnl_link_af_ops *af_lookup_and_alloc(struct rtnl_link *link,
 						    int family)
 {
